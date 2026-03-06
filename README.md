@@ -78,5 +78,3 @@ ML_Assignment_HCMUT/
 
 - 📑 Final Report (PDF): `reports/report.pdf`
 - 💻 Image Notebook: `notebooks/ex3_imageData.ipynb`
-
-If this project is shared via Google Drive / Colab, replace this section with the corresponding public links before submission.
