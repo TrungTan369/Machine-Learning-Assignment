@@ -10,11 +10,6 @@
 
 <br>
 
-## 👥 Team Members
-
-
----
-
 ## 🎯 Objectives
 This project aims to achieve the following educational goals:
 * Understand and apply the traditional machine learning pipeline, including: data preprocessing, feature extraction, model training, and evaluation.
