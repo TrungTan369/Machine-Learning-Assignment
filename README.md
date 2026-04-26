@@ -12,9 +12,6 @@
 
 ## 👥 Team Members
 
-| No. | Full Name | Student ID | Email | Role/Contribution |
-| :---: | :--- | :---: | :--- | :--- |
-| **1** | Nguyen Trung Tan | 2213063 | tan.nguyen369@hcmut.edu.vn | Image Data & Report |
 
 ---
 
