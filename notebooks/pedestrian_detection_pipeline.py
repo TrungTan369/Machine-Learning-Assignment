@@ -62,7 +62,7 @@ REPO_URL = "https://github.com/ngtan369/Hybrid-Image-Classification"
 REPO_DIR = "/content/repo"
 
 if not Path(REPO_DIR).exists():
-    os.system(f"git clone {REPO_URL} {REPO_DIR}")
+    os.system(f"git clone -b scratch {REPO_URL} {REPO_DIR}")
 
 if REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
