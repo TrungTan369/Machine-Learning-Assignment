@@ -162,8 +162,14 @@ def build_transfer_model(model_name: str = "vgg16",
 
     base.trainable = False
 
+    # Keras 3 (TF >= 2.16) disallows raw tf ops on a KerasTensor, so the
+    # backbone-specific preprocess function has to live inside a Lambda layer.
+    def _prep(t, _preprocess=preprocess):
+        return _preprocess(tf.cast(t, tf.float32))
+
     inputs = tf.keras.Input(shape=(h, w, 3))
-    x = preprocess(tf.cast(inputs, tf.float32))
+    x = tf.keras.layers.Lambda(_prep, output_shape=(h, w, 3),
+                               name=f"{name}_preprocess")(inputs)
     x = base(x, training=False)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     if dropout > 0:

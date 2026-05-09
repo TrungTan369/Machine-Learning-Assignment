@@ -610,6 +610,63 @@ def extract_negative_samples(annotation_data: list[dict],
     return images, labels
 
 
+def plot_voc_samples_with_bboxes(splits: Sequence[dict],
+                                 n: int = 4,
+                                 target_label: str = "person",
+                                 figsize: tuple[float, float] = (16, 5),
+                                 box_color: str = "lime",
+                                 seed: int = 0):
+    """Plot *n* random annotated images with their VOC bounding boxes drawn.
+
+    Parameters
+    ----------
+    splits : output of :func:`find_voc_splits`
+    n : how many images to plot
+    target_label : VOC ``<name>`` to draw (default ``person``)
+    figsize, box_color, seed : visual / reproducibility knobs
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+
+    samples: list[tuple[Path, list[dict]]] = []
+    for sp in splits:
+        annot = parse_voc_annotations(sp["annotation_dir"], target_label=target_label)
+        for entry in annot:
+            if not entry["objects"]:
+                continue
+            img_path = _resolve_image_path(sp["image_dir"], entry["filename"])
+            if img_path is not None:
+                samples.append((img_path, entry["objects"]))
+
+    if not samples:
+        print(f"No annotated images with {target_label!r} found in splits.")
+        return None
+
+    rng = np.random.default_rng(seed)
+    n = min(n, len(samples))
+    pick = rng.choice(len(samples), size=n, replace=False)
+
+    fig, axes = plt.subplots(1, n, figsize=figsize, squeeze=False)
+    for col, idx in enumerate(pick):
+        path, objects = samples[idx]
+        img = Image.open(str(path)).convert("RGB")
+        ax = axes[0, col]
+        ax.imshow(img)
+        for obj in objects:
+            x1, y1, x2, y2 = obj["bbox"]
+            rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1,
+                                     linewidth=2, edgecolor=box_color,
+                                     facecolor="none")
+            ax.add_patch(rect)
+            ax.text(x1, max(0, y1 - 4), obj["name"],
+                    color=box_color, fontsize=10,
+                    bbox=dict(facecolor="black", alpha=0.5, pad=1))
+        ax.set_title(f"{path.name}  ({len(objects)} {target_label})", fontsize=9)
+        ax.axis("off")
+    plt.tight_layout()
+    return fig
+
+
 def build_voc_binary_dataset(splits: Sequence[dict],
                              target_size: tuple[int, int] = (224, 224),
                              samples_per_image: int = 5,
