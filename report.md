@@ -61,26 +61,34 @@ Fine-tuning là bước kế tiếp transfer learning: sau khi lớp phân loạ
 
 ### 3.1. Nạp và tổ chức dữ liệu
 
-Tập INRIA Person trên Kaggle được tải tự động qua `kagglehub.dataset_download("jcoral02/inriaperson")` ngay trong notebook (không cần mount Drive). Tập dữ liệu chứa hai lớp `pos` (ảnh có người) và `neg` (ảnh không có người), được tổ chức trong các thư mục con `Train/` và `Test/`.
+Tập INRIA Person trên Kaggle được tải tự động qua `kagglehub.dataset_download("jcoral02/inriaperson")` ngay trong notebook (không cần mount Drive). Phiên bản dataset trên Kaggle này được phân phối theo cấu trúc PASCAL VOC: `Train/JPEGImages/` + `Train/Annotations/` (614 ảnh) và `Test/JPEGImages/` + `Test/Annotations/` (288 ảnh). Mỗi file XML chứa `<object><name>person</name>` cùng `<bndbox>` của các đối tượng người trong ảnh tương ứng.
 
-Hàm helper `find_class_dirs` (trong `modules/ml_utils.py`) duyệt cây thư mục để tự xác định vị trí của các thư mục `pos/` và `neg/`, không phụ thuộc vào lớp lồng nhau cụ thể:
+Notebook tự phát hiện cấu trúc này thông qua `ml_utils.find_voc_splits` (cell EDA in cây thư mục để dễ kiểm tra), sau đó:
 
 ```python
-class_dirs = ml_utils.find_class_dirs(DATASET_PATH, candidate_names=("pos", "neg"))
-# {'pos': PosixPath('.../INRIAPerson/Train/pos'),
-#  'neg': PosixPath('.../INRIAPerson/Train/neg')}
+voc_splits = ml_utils.find_voc_splits(DATASET_PATH)
+# [{'name':'Train', 'image_dir':.../JPEGImages, 'annotation_dir':.../Annotations}, ...]
 ```
 
-Sau đó toàn bộ ảnh được nạp và resize bằng `build_dataset`, trả về mảng `X` đồng nhất kích thước cùng nhãn `y` (0 = `pos`, 1 = `neg`):
+Để biến tập dữ liệu phát hiện đối tượng (chỉ có ảnh chứa người + bbox) thành bài toán phân loại nhị phân, helper `build_voc_binary_dataset` thực hiện:
+
+- **Lớp `pos` (1)** — crop từng bbox `person` từ ảnh và resize về `CONFIG["image_size"]`.
+- **Lớp `neg` (0)** — random crop `CONFIG["voc_neg_per_image"]` (mặc định 5) cửa sổ kích thước/scale ngẫu nhiên trên cùng các ảnh, *nhưng chỉ giữ những patch có IoU = 0 với mọi bbox người* để đảm bảo nhãn âm sạch.
 
 ```python
-X, y, class_names = ml_utils.build_dataset(
-    class_dirs,
-    image_size=CONFIG["image_size"],   # (224, 224)
-    max_per_class=CONFIG["max_per_class"],
-    shuffle=True, seed=CONFIG["random_state"],
+X, y, class_names = ml_utils.build_voc_binary_dataset(
+    voc_splits,
+    target_size=CONFIG["image_size"],          # (224, 224)
+    samples_per_image=CONFIG["voc_neg_per_image"],
+    target_label=CONFIG["voc_target_label"],   # "person"
+    seed=CONFIG["random_state"],
 )
+# class_names == ["neg", "pos"]
 ```
+
+Trên Kaggle `jcoral02/inriaperson` mặc định, kết quả là khoảng ~1.7k–2.0k mẫu (~900 positive ROIs từ bbox cộng ~4500 negative random patches, sau đó cắt theo `max_per_class` nếu có cấu hình).
+
+Helper cùng tên `build_dataset` vẫn được giữ cho trường hợp dataset đã có sẵn cấu trúc thư mục `pos/`/`neg/` (ImageFolder-style); notebook tự branch theo biến `DATASET_MODE`.
 
 ### 3.2. Tiền xử lý dữ liệu
 
@@ -104,7 +112,7 @@ Trước khi resize, helper `image_size_stats` đọc kích thước gốc của
 
 ### 3.4. Phân tích phân phối nhãn
 
-`label_distribution(y, class_names)` đếm số mẫu mỗi lớp. INRIA Person có khoảng `pos ≈ 902` và `neg ≈ 1218` ảnh khi tính cả `Train/` và `Test/`, dẫn tới tỉ lệ ~0.74:1 — không cân bằng nhẹ nhưng vẫn chấp nhận được; nhóm chọn dùng `stratify=y` ở `train_test_split` để bảo toàn tỉ lệ giữa tập train và test thay vì oversampling/undersampling.
+`label_distribution(y, class_names)` đếm số mẫu mỗi lớp sau khi đã tổng hợp positive crops và negative patches. Với cấu hình mặc định (`voc_neg_per_image=5`), tỉ lệ `pos:neg ≈ 1:5` (mỗi ảnh sinh trung bình 1 bbox người và tới 5 patch âm). Để bảng so sánh không bị mất cân bằng nặng, có thể (i) giảm `voc_neg_per_image` xuống 1, hoặc (ii) đặt `max_per_class` để cắt cùng kích thước hai lớp. Trong mọi trường hợp, `train_test_split` được gọi với `stratify=y` để bảo toàn tỉ lệ giữa tập huấn luyện và kiểm tra.
 
 ### 3.5. Phân tích đặc trưng pixel
 

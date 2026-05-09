@@ -12,6 +12,10 @@ Functions are grouped into:
   3. Classifier comparison            (build_classifier, evaluate_classifier,
                                        compare_classifiers)
   4. Feature I/O                      (save_features, load_features)
+  5. PASCAL VOC binary dataset        (find_voc_splits, parse_voc_annotations,
+                                       extract_positive_samples,
+                                       extract_negative_samples,
+                                       build_voc_binary_dataset)
 
 The pipeline is configurable: callers pick the image size, the pretrained
 feature extractor (see dl_utils), and the classifier. Helpers do not import
@@ -20,6 +24,8 @@ TensorFlow so they stay cheap to import in classical-only runs.
 
 from __future__ import annotations
 
+import random
+import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -408,3 +414,265 @@ def load_features(prefix: str, out_dir: str | Path = "features"
     X = np.load(str(out / f"{prefix}_X.npy"))
     y = np.load(str(out / f"{prefix}_y.npy"))
     return X, y
+
+
+# ---------------------------------------------------------------------------
+# 5. PASCAL VOC binary dataset (person / no-person)
+# ---------------------------------------------------------------------------
+
+def find_voc_splits(root: str | Path,
+                    image_dir_names: Sequence[str] = ("JPEGImages", "Images", "pos"),
+                    annot_dir_names: Sequence[str] = ("Annotations",)
+                    ) -> list[dict]:
+    """Find every (image_dir, annotation_dir) pair under *root*.
+
+    A "split" is a parent directory that has both an image folder and a
+    sibling annotation folder. Returns a list of
+    ``{"name": <parent>, "image_dir": Path, "annotation_dir": Path}``.
+    Useful for INRIA Person where Train/ and Test/ each ship JPEGImages/
+    and Annotations/ side-by-side.
+    """
+    root = Path(root)
+    img_set = {n.lower() for n in image_dir_names}
+    ann_set = {n.lower() for n in annot_dir_names}
+
+    splits: list[dict] = []
+    for parent in sorted({p.parent for p in root.rglob("*") if p.is_dir()}):
+        children = {c.name.lower(): c for c in parent.iterdir() if c.is_dir()}
+        img_dir = next((children[k] for k in children if k in img_set), None)
+        ann_dir = next((children[k] for k in children if k in ann_set), None)
+        if img_dir is not None and ann_dir is not None:
+            splits.append({
+                "name": parent.name,
+                "image_dir": img_dir,
+                "annotation_dir": ann_dir,
+            })
+    return splits
+
+
+def _compute_iou(a: list[int], b: list[int]) -> float:
+    xa = max(a[0], b[0]); ya = max(a[1], b[1])
+    xb = min(a[2], b[2]); yb = min(a[3], b[3])
+    inter = max(0, xb - xa) * max(0, yb - ya)
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def parse_voc_annotations(annotation_dir: str | Path,
+                          target_label: str = "person") -> list[dict]:
+    """Parse every PASCAL VOC ``*.xml`` file in *annotation_dir*.
+
+    Only objects whose ``<name>`` equals *target_label* (case-insensitive)
+    are kept. Returns a list of dicts:
+    ``{"filename": str, "objects": [{"name": str, "bbox": [x1,y1,x2,y2]}]}``.
+    """
+    annotation_dir = Path(annotation_dir)
+    target_lower = target_label.lower()
+    out: list[dict] = []
+    for xml_file in sorted(annotation_dir.glob("*.xml")):
+        tree = ET.parse(str(xml_file))
+        root = tree.getroot()
+        fname_el = root.find("filename")
+        if fname_el is None or not fname_el.text:
+            continue
+        objects: list[dict] = []
+        for obj in root.iter("object"):
+            name_el = obj.find("name")
+            bbox_el = obj.find("bndbox")
+            if (name_el is None or bbox_el is None
+                or name_el.text is None
+                or name_el.text.strip().lower() != target_lower):
+                continue
+            try:
+                xmin = int(float(bbox_el.findtext("xmin", "0")))
+                ymin = int(float(bbox_el.findtext("ymin", "0")))
+                xmax = int(float(bbox_el.findtext("xmax", "0")))
+                ymax = int(float(bbox_el.findtext("ymax", "0")))
+            except ValueError:
+                continue
+            if xmax > xmin and ymax > ymin:
+                objects.append({"name": target_lower,
+                                "bbox": [xmin, ymin, xmax, ymax]})
+        out.append({"filename": fname_el.text, "objects": objects})
+    return out
+
+
+def _open_rgb(path: Path) -> Image.Image | None:
+    try:
+        return Image.open(str(path)).convert("RGB")
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _resolve_image_path(image_dir: Path, filename: str) -> Path | None:
+    """Try to find *filename* under *image_dir*, falling back to other extensions."""
+    direct = image_dir / filename
+    if direct.exists():
+        return direct
+    stem = Path(filename).stem
+    for ext in (".png", ".jpg", ".jpeg", ".bmp", ".ppm"):
+        candidate = image_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def extract_positive_samples(annotation_data: list[dict],
+                             image_dir: str | Path,
+                             target_size: tuple[int, int] = (64, 128)
+                             ) -> tuple[np.ndarray, np.ndarray]:
+    """Crop each ``person`` bounding box and resize to *target_size* (W, H).
+
+    Returns ``(images, labels)`` where ``labels`` is an int array of 1s.
+    """
+    image_dir = Path(image_dir)
+    rois: list[np.ndarray] = []
+    for entry in annotation_data:
+        if not entry["objects"]:
+            continue
+        img_path = _resolve_image_path(image_dir, entry["filename"])
+        if img_path is None:
+            continue
+        img = _open_rgb(img_path)
+        if img is None:
+            continue
+        w_img, h_img = img.size
+        for obj in entry["objects"]:
+            x1, y1, x2, y2 = obj["bbox"]
+            x1 = max(0, x1); y1 = max(0, y1)
+            x2 = min(w_img, x2); y2 = min(h_img, y2)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = img.crop((x1, y1, x2, y2)).resize(target_size, Image.BILINEAR)
+            rois.append(np.array(crop, dtype=np.uint8))
+
+    if not rois:
+        return (np.empty((0, target_size[1], target_size[0], 3), dtype=np.uint8),
+                np.empty((0,), dtype=np.int64))
+    images = np.stack(rois, axis=0)
+    labels = np.ones(len(rois), dtype=np.int64)
+    return images, labels
+
+
+def extract_negative_samples(annotation_data: list[dict],
+                             image_dir: str | Path,
+                             target_size: tuple[int, int] = (64, 128),
+                             samples_per_image: int = 5,
+                             seed: int = 42
+                             ) -> tuple[np.ndarray, np.ndarray]:
+    """Random patches whose IoU with every ``person`` bbox is 0.
+
+    For images with no person annotations, any random window is accepted.
+    """
+    rng = random.Random(seed)
+    image_dir = Path(image_dir)
+    w_target, h_target = target_size
+    rois: list[np.ndarray] = []
+
+    for entry in annotation_data:
+        img_path = _resolve_image_path(image_dir, entry["filename"])
+        if img_path is None:
+            continue
+        img = _open_rgb(img_path)
+        if img is None:
+            continue
+        w_img, h_img = img.size
+        if w_img < w_target or h_img < h_target:
+            continue
+        boxes = [o["bbox"] for o in entry["objects"]]
+        max_attempts = samples_per_image * 10
+        collected = 0
+        attempts = 0
+        while collected < samples_per_image and attempts < max_attempts:
+            attempts += 1
+            scale = rng.uniform(1.0, 2.0)
+            crop_w = int(w_target * scale)
+            crop_h = int(h_target * scale)
+            if crop_w > w_img or crop_h > h_img:
+                crop_w, crop_h = w_target, h_target
+            x1 = rng.randint(0, w_img - crop_w)
+            y1 = rng.randint(0, h_img - crop_h)
+            x2 = x1 + crop_w
+            y2 = y1 + crop_h
+            if any(_compute_iou([x1, y1, x2, y2], b) > 0 for b in boxes):
+                continue
+            crop = img.crop((x1, y1, x2, y2)).resize(target_size, Image.BILINEAR)
+            rois.append(np.array(crop, dtype=np.uint8))
+            collected += 1
+
+    if not rois:
+        return (np.empty((0, target_size[1], target_size[0], 3), dtype=np.uint8),
+                np.empty((0,), dtype=np.int64))
+    images = np.stack(rois, axis=0)
+    labels = np.zeros(len(rois), dtype=np.int64)
+    return images, labels
+
+
+def build_voc_binary_dataset(splits: Sequence[dict],
+                             target_size: tuple[int, int] = (224, 224),
+                             samples_per_image: int = 5,
+                             max_per_class: int | None = None,
+                             shuffle: bool = True,
+                             seed: int = 42,
+                             target_label: str = "person",
+                             verbose: bool = True
+                             ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Build a (X, y, class_names) binary dataset from VOC-style splits.
+
+    Each split contributes positive crops (person bboxes) and an equal
+    *budget* of random negative crops drawn from the same image set.
+
+    Class names are ``["neg", "pos"]`` so that label 0 = neg and 1 = pos
+    (matches the convention used by extract_*_samples).
+
+    Parameters
+    ----------
+    splits : output of :func:`find_voc_splits`
+    target_size : (W, H) — final crop size before downstream resize
+    samples_per_image : negatives sampled per image
+    max_per_class : optional cap (applied after concatenating splits)
+    shuffle, seed : reproducibility
+    target_label : VOC ``<name>`` to treat as positive (default ``person``)
+    """
+    rng = np.random.default_rng(seed)
+    pos_X, neg_X = [], []
+    for sp in splits:
+        annot = parse_voc_annotations(sp["annotation_dir"], target_label=target_label)
+        if verbose:
+            n_obj = sum(len(e["objects"]) for e in annot)
+            print(f"  split {sp['name']}: {len(annot)} annotated images, "
+                  f"{n_obj} {target_label} bboxes")
+        Xp, _ = extract_positive_samples(annot, sp["image_dir"], target_size=target_size)
+        Xn, _ = extract_negative_samples(annot, sp["image_dir"],
+                                         target_size=target_size,
+                                         samples_per_image=samples_per_image,
+                                         seed=seed)
+        if verbose:
+            print(f"     -> pos crops={len(Xp)}, neg crops={len(Xn)}")
+        pos_X.append(Xp); neg_X.append(Xn)
+
+    Xp = np.concatenate(pos_X, axis=0) if pos_X else np.empty(
+        (0, target_size[1], target_size[0], 3), dtype=np.uint8)
+    Xn = np.concatenate(neg_X, axis=0) if neg_X else np.empty(
+        (0, target_size[1], target_size[0], 3), dtype=np.uint8)
+
+    if max_per_class is not None:
+        if len(Xp) > max_per_class:
+            idx = rng.permutation(len(Xp))[:max_per_class]
+            Xp = Xp[idx]
+        if len(Xn) > max_per_class:
+            idx = rng.permutation(len(Xn))[:max_per_class]
+            Xn = Xn[idx]
+
+    X = np.concatenate([Xn, Xp], axis=0)
+    y = np.concatenate([np.zeros(len(Xn), dtype=np.int64),
+                        np.ones(len(Xp), dtype=np.int64)], axis=0)
+    class_names = ["neg", "pos"]
+
+    if shuffle and len(X) > 0:
+        order = rng.permutation(len(X))
+        X = X[order]
+        y = y[order]
+    return X, y, class_names
