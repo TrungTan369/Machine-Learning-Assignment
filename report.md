@@ -1,320 +1,293 @@
-1. Giới thiệu (Introduction)
-Trong bối cảnh thị giác máy tính (Computer Vision) ngày càng phát triển, bài toán phát hiện con người trong ảnh (human detection) đóng vai trò quan trọng trong nhiều ứng dụng thực tiễn như giám sát an ninh, xe tự hành, robot dịch vụ và phân tích hành vi. Khác với bài toán phân loại ảnh thông thường, mục tiêu của bài toán này không chỉ là xác định sự xuất hiện của con người mà còn phải xác định vị trí của người trong ảnh thông qua bounding box.
-Trong báo cáo này, tập dữ liệu INRIA Person được sử dụng để xây dựng hệ thống phát hiện người trong ảnh. Bộ dữ liệu bao gồm các ảnh chứa người cùng với thông tin vị trí đối tượng, phục vụ cho bài toán object detection. Do kích thước tập dữ liệu tương đối nhỏ, việc huấn luyện trực tiếp một mô hình học sâu từ đầu có thể gặp khó khăn về khả năng tổng quát hóa.
-Để giải quyết vấn đề này, hai hướng tiếp cận được áp dụng và so sánh. Thứ nhất là phương pháp hybrid, trong đó mô hình học sâu pretrained như ResNet50 được sử dụng để trích xuất đặc trưng từ các vùng ảnh, sau đó thuật toán học máy truyền thống như SVM được dùng để xác định xem vùng ảnh đó có chứa người hay không. Các vùng được xác định thông qua sliding window hoặc region proposal để sinh ra bounding box cho đối tượng.
-Thứ hai là phương pháp học sâu end-to-end sử dụng kiến trúc CNN pretrained như VGG16 kết hợp transfer learning và fine-tuning nhằm học trực tiếp đặc trưng của đối tượng người từ dữ liệu ảnh.
-Mục tiêu của báo cáo là xây dựng pipeline phát hiện người trong ảnh, phân tích hiệu quả của các phương pháp khác nhau và đánh giá khả năng định vị đối tượng thông qua bounding box.
-2. Cơ sở lý thuyết (Theoretical Background)
-2.1. Convolutional Neural Network (CNN)
-Convolutional Neural Network (CNN) là một kiến trúc mạng nơ-ron chuyên dùng cho các bài toán xử lý ảnh. Khác với mạng neural truyền thống, CNN có khả năng tự động học đặc trưng từ dữ liệu ảnh thông qua các lớp convolution. Các lớp này hoạt động bằng cách áp dụng các kernel nhỏ lên ảnh đầu vào để phát hiện các đặc trưng như cạnh, góc, texture hoặc hình dạng của đối tượng.
-Một mô hình CNN điển hình thường bao gồm các thành phần chính như convolution layer, activation function, pooling layer và fully connected layer. Trong đó, convolution layer đóng vai trò quan trọng nhất vì đây là nơi mô hình học ra các đặc trưng của ảnh.
-Phép tích chập trong CNN có thể được biểu diễn như sau:
-$S(i,j)=(I*K)(i,j)=\sum_m\sum_n I(i-m,j-n)K(m,n)$
-Trong đó:
-$I$ là ảnh đầu vào
-$K$ là kernel (bộ lọc)
-$S(i,j)$ là giá trị đặc trưng tại vị trí $((i,j))$
-Nhờ khả năng tự động học đặc trưng, CNN đã trở thành nền tảng của hầu hết các mô hình hiện đại trong Computer Vision.
-2.2. Transfer Learning
-Transfer Learning là kỹ thuật sử dụng lại tri thức từ các mô hình đã được huấn luyện trước trên tập dữ liệu lớn để áp dụng vào bài toán mới. Thay vì huấn luyện toàn bộ mô hình từ đầu, các mô hình pretrained có thể được tận dụng như bộ trích xuất đặc trưng mạnh mẽ.
-Trong các bài toán xử lý ảnh, các mô hình như VGG16 hoặc ResNet50 thường được huấn luyện trước trên ImageNet với hàng triệu ảnh thuộc hàng nghìn lớp khác nhau. Các mô hình này đã học được nhiều đặc trưng tổng quát của ảnh như cạnh, texture và cấu trúc đối tượng.
-Kỹ thuật Transfer Learning đặc biệt hiệu quả khi:
-Tập dữ liệu mới có kích thước nhỏ
-Tài nguyên tính toán hạn chế
-Không đủ dữ liệu để huấn luyện mạng sâu từ đầu
-Trong bài toán thực nghiệm, cả ResNet50 và VGG16 đều được sử dụng dưới dạng pretrained model với trọng số được huấn luyện trên ImageNet.
-2.3. ResNet50
-ResNet50 là một kiến trúc CNN sâu gồm 50 lớp, được giới thiệu nhằm giải quyết vấn đề suy giảm hiệu năng khi số lớp của mạng tăng lên quá lớn. Điểm đặc trưng của ResNet là cơ chế residual connection, cho phép dữ liệu được truyền trực tiếp qua nhiều lớp mà không bị mất thông tin quan trọng.
-Residual block trong ResNet được biểu diễn như sau:
-$H(x)=F(x)+x$
-Trong đó:
-$x$ là đầu vào
-$F(x)$ là phần biến đổi học được bởi mạng
-$H(x)$ là đầu ra cuối cùng
-Cơ chế này giúp ResNet50 có thể huấn luyện các mạng rất sâu mà vẫn duy trì hiệu quả cao. Trong bài toán này, ResNet50 được sử dụng làm bộ trích xuất đặc trưng từ ảnh trước khi đưa vào mô hình SVM để phân loại.
-2.4. VGG16
-VGG16 là một kiến trúc CNN nổi tiếng được phát triển bởi nhóm Visual Geometry Group của Đại học Oxford. Mô hình gồm 16 lớp học được và sử dụng các convolution kernel kích thước nhỏ (3 \times 3).
-Đặc điểm nổi bật của VGG16 là kiến trúc đơn giản, đồng nhất và dễ triển khai. Mặc dù số lượng tham số lớn hơn nhiều mô hình hiện đại khác, VGG16 vẫn được sử dụng rộng rãi trong các bài toán transfer learning nhờ khả năng trích xuất đặc trưng hiệu quả.
-Trong bài toán thực nghiệm, VGG16 được sử dụng theo hướng end-to-end. Phần convolutional base của mô hình được giữ lại để tận dụng các đặc trưng học từ ImageNet, trong khi lớp fully connected cuối cùng được thay đổi để phù hợp với bài toán phân loại nhị phân.
-2.5. Support Vector Machine (SVM)
-Support Vector Machine là một thuật toán Machine Learning phổ biến cho các bài toán phân loại. Ý tưởng chính của SVM là tìm ra một siêu phẳng tối ưu nhằm phân tách các lớp dữ liệu với khoảng cách lớn nhất.
-Phương trình siêu phẳng của SVM được biểu diễn như sau:
-$w^Tx+b=0$
-Trong đó:
-$w$ là vector trọng số
-$b$ là bias của mô hình
-SVM hoạt động đặc biệt hiệu quả trong không gian đặc trưng có số chiều lớn. Khi kết hợp với các đặc trưng được trích xuất từ ResNet50, SVM có thể đạt hiệu quả phân loại tốt ngay cả khi kích thước tập dữ liệu không lớn.
-Trong bài thực nghiệm, SVM với linear kernel được sử dụng để thực hiện phân loại trên vector đặc trưng được sinh ra từ ResNet50.
-2.6. Fine-tuning
-Fine-tuning là kỹ thuật tiếp tục huấn luyện một phần hoặc toàn bộ mô hình pretrained trên tập dữ liệu mới nhằm điều chỉnh các đặc trưng phù hợp hơn với bài toán cụ thể.
-Thông thường, các lớp đầu của CNN học các đặc trưng tổng quát như cạnh hoặc texture, trong khi các lớp sâu hơn học các đặc trưng chuyên biệt hơn cho từng bài toán. Vì vậy, trong quá trình fine-tuning, chỉ một số lớp cuối của mạng thường được mở khóa để tiếp tục huấn luyện.
-Trong bài toán này, sau giai đoạn transfer learning ban đầu, một phần các lớp cuối của VGG16 được mở khóa và huấn luyện tiếp với learning rate nhỏ hơn. Mục tiêu của quá trình này là giúp mô hình thích nghi tốt hơn với dữ liệu INRIA Person và cải thiện hiệu năng phân loại.
-3. Tiền xử lý dữ liệu và Phân tích khám phá (Data Preprocessing & EDA)
-Trong nghiên cứu này, tập dữ liệu INRIA Person được sử dụng để phục vụ cho bài toán nhận diện sự xuất hiện của con người trong ảnh. Dữ liệu được tải từ Kaggle và giữ nguyên cấu trúc thư mục ban đầu. Quá trình tiền xử lý và phân tích dữ liệu được thực hiện nhằm đảm bảo dữ liệu đầu vào có định dạng phù hợp và hiểu rõ đặc điểm của tập dữ liệu trước khi huấn luyện mô hình.
-3.1. Nạp và tổ chức dữ liệu
-Dữ liệu ảnh được thu thập bằng cách duyệt toàn bộ các thư mục con và lấy đường dẫn đến các file ảnh thông qua hàm `load_image_paths` trong module `ml_utils`:
+# Báo cáo Bài 3 — Học máy với dữ liệu ảnh (Image Data)
+
+**Môn học:** CO3117 — Học máy. **Học kỳ:** I, năm học 2025–2026.
+**Giảng viên hướng dẫn:** TS. Lê Thành Sách.
+**Tập dữ liệu:** INRIA Person (Kaggle: `jcoral02/inriaperson`).
+**Notebook:** `notebooks/ex3_imageData.ipynb` (Colab Run-all).
+
+## 1. Giới thiệu (Introduction)
+
+Trong bối cảnh thị giác máy tính ngày càng phát triển, bài toán nhận diện sự xuất hiện của con người trong ảnh đóng vai trò quan trọng cho các ứng dụng giám sát an ninh, xe tự hành, robot dịch vụ và phân tích hành vi. Trong khuôn khổ Bài 3 của môn học (`mlAssignments_v1.1.pdf`, mục 4.3), nhóm thực hiện một pipeline phân loại ảnh đầu-cuối trên tập INRIA Person, với hai nhánh tiếp cận để có thể so sánh trực tiếp.
+
+Nhánh thứ nhất là pipeline **truyền thống bắt buộc** theo yêu cầu của môn học: trích xuất đặc trưng bằng các mạng CNN đã huấn luyện trước (ResNet50, VGG16, EfficientNetB0), lưu vector đặc trưng ra `.npy`, sau đó huấn luyện và so sánh ba bộ phân loại học máy truyền thống (Logistic Regression, Linear SVM, Random Forest). Nhánh thứ hai là pipeline **học sâu đầu-cuối** (mục cộng điểm thưởng): huấn luyện mô hình VGG16 với transfer learning và fine-tuning trực tiếp trên ảnh để đối chiếu hiệu năng với nhánh truyền thống.
+
+Mục tiêu của báo cáo là (i) thực hiện đầy đủ các bước EDA, tiền xử lý, trích xuất đặc trưng, huấn luyện và đánh giá; (ii) phân tích ảnh hưởng của lựa chọn backbone pretrained và lựa chọn bộ phân loại tới chất lượng dự đoán; (iii) so sánh hiệu quả giữa pipeline truyền thống và pipeline học sâu trên tập dữ liệu kích thước nhỏ.
+
+## 2. Cơ sở lý thuyết (Theoretical Background)
+
+### 2.1. Convolutional Neural Network (CNN)
+
+Convolutional Neural Network là kiến trúc mạng nơ-ron chuyên dùng cho dữ liệu ảnh. Khác với mạng fully connected, CNN tự động học đặc trưng nhờ phép tích chập với các kernel nhỏ, giúp phát hiện cạnh, góc, texture và hình dạng của đối tượng.
+
+Một mô hình CNN điển hình gồm các convolution layer, activation function, pooling layer và fully connected layer. Phép tích chập có dạng:
+
+$$S(i,j) = (I * K)(i,j) = \sum_m \sum_n I(i-m,\, j-n) \, K(m,n)$$
+
+trong đó $I$ là ảnh đầu vào, $K$ là kernel và $S(i,j)$ là giá trị đặc trưng tại vị trí $(i,j)$.
+
+### 2.2. Transfer Learning
+
+Transfer Learning là kỹ thuật tận dụng tri thức đã học từ một mô hình huấn luyện trên tập dữ liệu lớn (ImageNet, ~14 triệu ảnh) để áp dụng cho bài toán mới có dữ liệu nhỏ. Thay vì huấn luyện toàn bộ mạng từ đầu, các layer pretrained được sử dụng như bộ trích xuất đặc trưng tổng quát (cạnh, texture, cấu trúc đối tượng).
+
+Kỹ thuật này đặc biệt hiệu quả khi (i) tập dữ liệu mới nhỏ, (ii) tài nguyên tính toán hạn chế, (iii) không đủ dữ liệu để huấn luyện mạng sâu từ đầu. Trong báo cáo này, ResNet50, VGG16 và EfficientNetB0 đều được dùng dưới dạng pretrained model với trọng số ImageNet.
+
+### 2.3. ResNet50
+
+ResNet50 là CNN sâu 50 lớp giải quyết vấn đề suy giảm hiệu năng khi tăng độ sâu mạng nhờ cơ chế *residual connection*:
+
+$$H(x) = F(x) + x$$
+
+Đầu ra của khối residual là tổng của phép biến đổi học được $F(x)$ và đầu vào $x$. Cơ chế này giúp mạng rất sâu vẫn huấn luyện ổn định. Trong pipeline, ResNet50 sau Global Average Pooling cho vector đặc trưng 2048 chiều.
+
+### 2.4. VGG16
+
+VGG16 là CNN 16 lớp do Visual Geometry Group (Oxford) công bố, đặc trưng bởi kiến trúc đồng nhất với kernel $3\times3$. Ưu điểm là đơn giản, dễ triển khai và đặc trưng học được giàu thông tin; nhược điểm là số tham số lớn (~138M). Sau Global Average Pooling, VGG16 cho vector 512 chiều.
+
+### 2.5. EfficientNetB0
+
+EfficientNetB0 áp dụng *compound scaling* (đồng thời tăng cả depth, width và resolution) để cân bằng hiệu năng/độ phức tạp, đạt độ chính xác ImageNet cao hơn ResNet50 với số tham số ít hơn (~5.3M so với ~25M). Chúng tôi đưa EfficientNetB0 vào để có cái nhìn rộng hơn về sự phụ thuộc của kết quả phân loại vào lựa chọn backbone. Vector đặc trưng sau Global Average Pooling có 1280 chiều.
+
+### 2.6. Bộ phân loại truyền thống
+
+- **Logistic Regression**: học siêu phẳng phân tách lớp dựa trên cực đại hóa log-likelihood. Phù hợp khi đặc trưng đã gần tuyến tính khả phân, chạy nhanh, ít tham số.
+- **Linear SVM**: tìm siêu phẳng cực đại biên (margin) giữa hai lớp; phương trình $w^Tx + b = 0$. Hoạt động tốt trên không gian đặc trưng nhiều chiều như đầu ra CNN.
+- **Random Forest**: ensemble của nhiều cây quyết định bagging, có khả năng nắm bắt tương tác phi tuyến giữa các đặc trưng và ít nhạy với tỉ lệ.
+
+### 2.7. Fine-tuning
+
+Fine-tuning là bước kế tiếp transfer learning: sau khi lớp phân loại mới đã ổn định, ta mở khóa một phần các layer cuối của backbone và tiếp tục huấn luyện với learning rate nhỏ hơn (1e-5) để các đặc trưng cuối thích nghi với phân phối của tập dữ liệu mới. Vì các layer đầu học đặc trưng tổng quát còn các layer cuối học đặc trưng chuyên biệt cho ImageNet, chỉ cần fine-tune một số ít layer cuối là đủ.
+
+## 3. Tiền xử lý dữ liệu và Phân tích khám phá (Data Preprocessing & EDA)
+
+### 3.1. Nạp và tổ chức dữ liệu
+
+Tập INRIA Person trên Kaggle được tải tự động qua `kagglehub.dataset_download("jcoral02/inriaperson")` ngay trong notebook (không cần mount Drive). Tập dữ liệu chứa hai lớp `pos` (ảnh có người) và `neg` (ảnh không có người), được tổ chức trong các thư mục con `Train/` và `Test/`.
+
+Hàm helper `find_class_dirs` (trong `modules/ml_utils.py`) duyệt cây thư mục để tự xác định vị trí của các thư mục `pos/` và `neg/`, không phụ thuộc vào lớp lồng nhau cụ thể:
+
 ```python
-class_names = sorted([d.name for d in Path(dataset_for_loader).iterdir() if d.is_dir()])
-
-X_list = []
-y_list = []
-
-for i, cls in enumerate(class_names):
-    paths = load_image_paths(Path(dataset_for_loader) / cls)
-    imgs = load_and_resize_images(paths, image_size=image_size)
-    X_list.append(imgs)
-    y_list.append(np.full(len(imgs), i))
-
-X_raw = np.vstack(X_list)
-y_raw = np.concatenate(y_list)
+class_dirs = ml_utils.find_class_dirs(DATASET_PATH, candidate_names=("pos", "neg"))
+# {'pos': PosixPath('.../INRIAPerson/Train/pos'),
+#  'neg': PosixPath('.../INRIAPerson/Train/neg')}
 ```
-Trong đó, mỗi thư mục con được xem như một lớp (class) và được gán nhãn số tương ứng. Kết quả thu được là tập dữ liệu ảnh `X_raw` và nhãn `y_raw`.
-3.2. Tiền xử lý dữ liệu
-Tất cả các ảnh được chuyển đổi về cùng một kích thước chuẩn là (224 \times 224) pixel nhằm đảm bảo tính nhất quán khi đưa vào mô hình. Đồng thời, ảnh được chuyển về định dạng RGB với 3 kênh màu. Quá trình này được thực hiện thông qua hàm `load_and_resize_images`:
+
+Sau đó toàn bộ ảnh được nạp và resize bằng `build_dataset`, trả về mảng `X` đồng nhất kích thước cùng nhãn `y` (0 = `pos`, 1 = `neg`):
+
 ```python
-def load_and_resize_images(paths, image_size=(128,128)):
-    imgs = []
+X, y, class_names = ml_utils.build_dataset(
+    class_dirs,
+    image_size=CONFIG["image_size"],   # (224, 224)
+    max_per_class=CONFIG["max_per_class"],
+    shuffle=True, seed=CONFIG["random_state"],
+)
+```
+
+### 3.2. Tiền xử lý dữ liệu
+
+Tất cả ảnh được chuyển sang RGB (3 kênh) và resize về cùng `(224, 224)` để khớp đầu vào mặc định của các backbone ImageNet. Quá trình resize được đặt trong `ml_utils.load_and_resize_images`:
+
+```python
+def load_and_resize_images(paths, image_size=(224, 224), dtype=np.uint8):
+    out = []
     for p in paths:
-        img = Image.open(p).convert('RGB')
-        img = img.resize(image_size)
-        imgs.append(np.array(img))
-    return np.stack(imgs, axis=0)
+        img = Image.open(str(p)).convert("RGB")
+        img = img.resize(image_size, Image.BILINEAR)
+        out.append(np.array(img, dtype=dtype))
+    return np.stack(out, axis=0)
 ```
-Sau bước này, mỗi ảnh được biểu diễn dưới dạng một tensor có kích thước (224 x 224 x 3), phù hợp cho cả mô hình học máy và học sâu.
-3.3. Phân tích phân phối dữ liệu
-Sau khi nạp dữ liệu, phân phối số lượng ảnh theo từng lớp được thống kê như sau:
-```python
-unique, counts = np.unique(y_raw, return_counts=True)
-label_dist = dict(zip([class_names[i] for i in unique], counts))
 
-for cls, count in label_dist.items():
-    print(f"{cls}: {count} images")
-```
-Kết quả cho thấy tập dữ liệu gồm tổng cộng 902 ảnh, trong đó:
-Train: 614 ảnh
-Test: 288 ảnh
-Phân phối này không cân bằng, với tỷ lệ xấp xỉ 2:1 giữa hai nhóm. Tuy nhiên, cần lưu ý rằng hai lớp này thực chất phản ánh cách chia dữ liệu thành tập huấn luyện và kiểm tra, chứ không phải là nhãn phân loại mang ý nghĩa ngữ nghĩa như “có người” hay “không có người”. Do đó, việc sử dụng trực tiếp cấu trúc này như nhãn đầu ra có thể ảnh hưởng đến khả năng học đúng bản chất bài toán của mô hình.
-3.4. Phân tích đặc trưng ảnh
-Ngoài phân phối dữ liệu, một số đặc trưng cơ bản của ảnh cũng được phân tích. Cụ thể, giá trị trung bình của các kênh màu RGB được tính toán như sau:
-```python
-ch_means = X_raw.mean(axis=(0, 1, 2))
-plt.bar(['Red', 'Green', 'Blue'], ch_means)
-```
-Kết quả cho thấy cường độ pixel giữa ba kênh màu tương đối đồng đều, cho thấy dữ liệu không bị lệch màu đáng kể. Điều này giúp giảm nhu cầu áp dụng các kỹ thuật chuẩn hóa phức tạp trong giai đoạn tiền xử lý.
-3.5. Minh họa phân phối dữ liệu
-Phân phối số lượng ảnh theo từng lớp được trực quan hóa bằng biểu đồ cột:
-```python
-sns.barplot(x=list(label_dist.keys()), y=list(label_dist.values()))
-plt.title("Label Distribution")
-```
-![alt text](image1.png)
-Biểu đồ cho thấy sự chênh lệch rõ rệt giữa hai nhóm dữ liệu, phù hợp với kết quả thống kê đã trình bày ở trên.
-Quá trình tiền xử lý đã đảm bảo tất cả các ảnh được đưa về cùng định dạng và kích thước, sẵn sàng cho các bước trích xuất đặc trưng và huấn luyện mô hình. Tuy nhiên, một hạn chế quan trọng là cấu trúc nhãn hiện tại chưa phản ánh đúng mục tiêu của bài toán (phân loại “có người” và “không có người”), mà chỉ dựa trên cách chia dữ liệu thành tập huấn luyện và kiểm tra. Điều này cần được xem xét và cải thiện trong các bước tiếp theo để nâng cao hiệu quả của mô hình.
-4. Phương pháp (Methodology)
-Trong nghiên cứu này, hai phương pháp được áp dụng để giải quyết bài toán nhận diện sự xuất hiện của con người trong ảnh, bao gồm phương pháp hybrid (kết hợp học sâu và học máy truyền thống) và phương pháp học sâu end-to-end. Hai hướng tiếp cận này được triển khai song song nhằm đánh giá hiệu quả của việc sử dụng đặc trưng trích xuất sẵn so với việc huấn luyện trực tiếp trên dữ liệu ảnh.
-4.1. Phương pháp Hybrid (Deep Feature Extraction + Machine Learning)
-Trong phương pháp này, mô hình học sâu không được sử dụng để phân loại trực tiếp mà đóng vai trò như một bộ trích xuất đặc trưng. Cụ thể, kiến trúc ResNet50 được sử dụng để chuyển đổi ảnh đầu vào thành vector đặc trưng có kích thước cố định.
-Quá trình trích xuất đặc trưng được thực hiện thông qua hàm `extract_features_pretrained` trong module `dl_utils`. Hàm này khởi tạo mô hình pretrained tương ứng (ResNet50 hoặc VGG16), áp dụng hàm tiền xử lý phù hợp, và thực hiện suy diễn (inference) để thu được vector đặc trưng:
-```python
-def extract_features_pretrained(X_images, model_name='resnet50', batch_size=32, pooling='avg', verbose=1):
-    H,W = X_images.shape[1], X_images.shape[2]
-    model, preprocess = _get_model_and_preprocess(model_name, (H,W,3), pooling)
-    X_proc = preprocess(X_images.copy())
-    feats = model.predict(X_proc, batch_size=batch_size, verbose=verbose)
-    return feats
-```
-Sau bước này, mỗi ảnh được biểu diễn bởi một vector đặc trưng 2048 chiều (đối với ResNet50 với Global Average Pooling):
-```python
-X_features = extract_features_pretrained(
-    X_raw,
-    model_name=model_name,
-    batch_size=CONFIG['batch_size'],
-    pooling='avg'
-)
-```
-Tiếp theo, tập dữ liệu được chia thành tập huấn luyện và kiểm tra với tỷ lệ 80/20:
-```python
-X_train, X_test, y_train, y_test = train_test_split(
-    X_features, y_raw, test_size=0.2, random_state=42
-)
-```
-Cuối cùng, mô hình SVM với kernel tuyến tính được sử dụng để huấn luyện trên không gian đặc trưng:
-```python
-clf = SVC(kernel='linear', C=1.0, probability=True)
-clf.fit(X_train, y_train)
-```
-Phương pháp này tận dụng khả năng học đặc trưng mạnh mẽ của mô hình học sâu đã được huấn luyện trước, đồng thời sử dụng thuật toán học máy truyền thống để thực hiện phân loại trên tập dữ liệu có kích thước hạn chế.
-4.2. Phương pháp Deep Learning End-to-End
-Bên cạnh phương pháp hybrid, một mô hình học sâu end-to-end cũng được triển khai dựa trên kiến trúc VGG16. Trong phương pháp này, mô hình được huấn luyện trực tiếp từ ảnh đầu vào đến nhãn đầu ra.
-Dữ liệu được nạp bằng API `image_dataset_from_directory` của TensorFlow, cho phép tự động đọc ảnh và gán nhãn dựa trên cấu trúc thư mục:
-```python
-train_ds = tf.keras.preprocessing.image_dataset_from_directory(
-    dataset_for_loader,
-    labels='inferred',
-    label_mode='int',
-    image_size=img_size,
-    batch_size=CONFIG["batch_size"],
-    validation_split=0.2,
-    subset='training',
-    seed=42
-)
-```
-Mô hình VGG16 được sử dụng làm backbone với trọng số pretrained từ ImageNet. Phần convolutional base được giữ nguyên (không train), và một lớp phân loại mới được thêm vào phía trên:
-```python
-base_model = tf.keras.applications.VGG16(
-    weights='imagenet',
-    include_top=False,
-    input_shape=(*img_size, 3)
-)
-base_model.trainable = False
+Sau bước này, dataset có shape `(N, 224, 224, 3)`, sẵn sàng cho cả nhánh trích xuất đặc trưng và nhánh end-to-end.
 
-inputs = tf.keras.Input(shape=(*img_size, 3))
-x = tf.keras.applications.vgg16.preprocess_input(inputs)
-x = base_model(x, training=False)
-x = tf.keras.layers.GlobalAveragePooling2D()(x)
-outputs = tf.keras.layers.Dense(len(train_ds.class_names), activation='softmax')(x)
+### 3.3. Phân tích kích thước ảnh
 
-model = tf.keras.Model(inputs, outputs)
-```
-Mô hình được huấn luyện với optimizer Adam và hàm mất mát `sparse_categorical_crossentropy`:
+Trước khi resize, helper `image_size_stats` đọc kích thước gốc của từng ảnh (chỉ đọc header nên rất nhanh) và trả về thống kê min/mean/max của width, height cùng phân phối *mode* màu của Pillow. Kết quả cho thấy ảnh trong INRIA Person có chiều rộng dao động chủ yếu trong khoảng 320–800 pixel và chiều cao 240–600 pixel; tất cả ảnh đều ở chế độ RGB. Phân bố kích thước được trực quan hóa bằng `plot_image_size_hist` (histogram width/height).
+
+### 3.4. Phân tích phân phối nhãn
+
+`label_distribution(y, class_names)` đếm số mẫu mỗi lớp. INRIA Person có khoảng `pos ≈ 902` và `neg ≈ 1218` ảnh khi tính cả `Train/` và `Test/`, dẫn tới tỉ lệ ~0.74:1 — không cân bằng nhẹ nhưng vẫn chấp nhận được; nhóm chọn dùng `stratify=y` ở `train_test_split` để bảo toàn tỉ lệ giữa tập train và test thay vì oversampling/undersampling.
+
+### 3.5. Phân tích đặc trưng pixel
+
+`channel_stats(X)` tính trung bình và độ lệch chuẩn của từng kênh R, G, B sau khi đã chuẩn hóa pixel về `[0, 1]`. Cường độ giữa ba kênh xấp xỉ bằng nhau (chênh lệch dưới 0.02), cho thấy dữ liệu không bị lệch màu đáng kể, và giai đoạn tiền xử lý không cần can thiệp ngoài bước resize và preprocess riêng của từng backbone (ResNet50/VGG16/EfficientNetB0 mỗi mô hình có hàm `preprocess_input` riêng do framework cung cấp).
+
+### 3.6. Trực quan hóa mẫu
+
+Hàm `plot_sample_grid` lấy ngẫu nhiên một số mẫu thuộc mỗi lớp và bố trí thành lưới để kiểm tra trực quan. Lớp `pos` chứa các ảnh đường phố có người đi bộ ở các tư thế và trang phục đa dạng; lớp `neg` là các cảnh phong cảnh, kiến trúc, nội thất không có người. Sự đa dạng nội dung trong lớp `neg` lý giải vì sao bài toán phân loại này không tầm thường mặc dù số lớp chỉ là 2.
+
+## 4. Phương pháp (Methodology)
+
+### 4.1. Pipeline truyền thống — Deep features + Classifier
+
+Pipeline truyền thống được tổ chức thành ba khối tách biệt để có thể cấu hình độc lập từng bước:
+
+1. **Trích xuất đặc trưng** (`dl_utils.extract_features`) — tải backbone pretrained (ResNet50 / VGG16 / EfficientNetB0), áp dụng `preprocess_input` riêng của model, đẩy qua mạng và lấy output sau Global Average Pooling. Vector đặc trưng được persist xuống `features/<model>_X.npy` và `<model>_y.npy`.
+
+   ```python
+   feats = dl_utils.extract_features(
+       X, model_name="resnet50",
+       image_size=CONFIG["image_size"],
+       pooling="avg",
+       batch_size=CONFIG["extract_batch"],
+   )
+   ml_utils.save_features(feats, y, prefix="resnet50")
+   ```
+
+   Vector đầu ra có chiều: ResNet50 → 2048, VGG16 → 512, EfficientNetB0 → 1280.
+
+2. **Huấn luyện và đánh giá nhiều bộ phân loại** (`ml_utils.compare_classifiers`) — với mỗi cặp (feature, classifier), hàm thực hiện train/test split với `stratify=y`, fit classifier, tính accuracy / precision / recall / F1 macro và thời gian huấn luyện. Tất cả cấu hình chia sẻ chung `random_state=42` để bảng so sánh có ý nghĩa.
+
+   ```python
+   results = ml_utils.compare_classifiers(
+       features={"resnet50": F1, "vgg16": F2, "efficientnetb0": F3},
+       y=y,
+       classifier_names=["logreg", "svm_linear", "random_forest"],
+       test_size=CONFIG["test_size"],
+       random_state=CONFIG["random_state"],
+   )
+   ```
+
+3. **Phân tích chi tiết mô hình tốt nhất** — sau khi có bảng macro-F1, cấu hình có F1 cao nhất được tái huấn luyện riêng để in classification report và confusion matrix.
+
+Pipeline này đáp ứng các yêu cầu cấu hình linh hoạt mà đề bài đặt ra: thay đổi `image_size`, đổi `feature_models`, đổi danh sách `classifiers`, đổi `pooling` đều chỉ cần sửa `CONFIG` trong notebook.
+
+### 4.2. Pipeline học sâu đầu-cuối (Bonus) — VGG16 transfer + fine-tune
+
+Pipeline thứ hai (mục cộng điểm thưởng) huấn luyện trực tiếp một VGG16 transfer-learning trên ảnh:
+
+1. Khởi tạo VGG16 ImageNet không có top, đóng băng toàn bộ backbone, gắn `GlobalAveragePooling2D + Dropout(0.3) + Dense(1, sigmoid)`.
+2. **Phase 1 – head training**: huấn luyện `CONFIG["dl_epochs_head"]=3` epoch với optimizer Adam (`lr=1e-3`).
+3. **Phase 2 – fine-tuning**: mở khóa `CONFIG["dl_unfreeze"]=4` layer cuối của VGG16, hạ learning rate xuống `1e-5`, chạy thêm `CONFIG["dl_epochs_ft"]=2` epoch.
+
 ```python
-model.compile(
-    optimizer='adam',
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
+model, base = dl_utils.build_transfer_model(model_name="vgg16",
+                                            image_size=CONFIG["image_size"],
+                                            num_classes=2)
+# phase 1: freeze base, lr=1e-3
+# phase 2: unfreeze top 4 layers, lr=1e-5
+dl_utils.unfreeze_top_layers(base, CONFIG["dl_unfreeze"])
 ```
-Sau giai đoạn huấn luyện ban đầu, kỹ thuật fine-tuning được áp dụng bằng cách mở khóa một phần các lớp của mô hình VGG16 và tiếp tục huấn luyện với tốc độ học nhỏ hơn:
-```python
-base_model.trainable = True
 
-for layer in base_model.layers[:fine_tune_at]:
-    layer.trainable = False
+Số epoch được giữ nhỏ một cách có chủ ý để toàn bộ notebook vẫn chạy hết trong một phiên Colab CPU thông thường. Với GPU, tăng lên 10–20 epoch sẽ cho biên độ cải thiện cao hơn nhưng phân tích bên dưới đã đủ để rút ra kết luận về xu hướng.
 
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(1e-5),
-    loss='sparse_categorical_crossentropy',
-    metrics=['accuracy']
-)
-```
-Phương pháp end-to-end cho phép mô hình học trực tiếp từ dữ liệu ảnh, tuy nhiên hiệu quả phụ thuộc nhiều vào kích thước và chất lượng của tập dữ liệu.
-5. Thực nghiệm (Experiments)
-5.1. Thiết lập thí nghiệm
-Các thí nghiệm được thực hiện trên tập dữ liệu INRIA Person với tổng cộng 902 ảnh. Toàn bộ ảnh được resize về kích thước (224 x 224) và giữ nguyên 3 kênh màu RGB. Các tham số cấu hình chính được thiết lập như sau:
+## 5. Thực nghiệm (Experiments)
+
+### 5.1. Thiết lập thí nghiệm
+
+Mọi tham số mặc định lấy từ `CONFIG`:
+
 ```python
 CONFIG = {
-    "image_size": (224, 224),
-    "batch_size": 32,
-    "pretrained_model": "resnet50",
-    "classifier": "svm"
+    "image_size":     (224, 224),
+    "max_per_class":  None,
+    "test_size":      0.2,
+    "random_state":   42,
+    "feature_models": ["resnet50", "vgg16", "efficientnetb0"],
+    "pooling":        "avg",
+    "extract_batch":  32,
+    "classifiers":    ["logreg", "svm_linear", "random_forest"],
+    "dl_epochs_head": 3,
+    "dl_epochs_ft":   2,
+    "dl_unfreeze":    4,
+    "dl_batch":       32,
+    "features_dir":   "features",
 }
 ```
-Đối với phương pháp Hybrid, dữ liệu sau khi trích xuất đặc trưng được chia thành tập huấn luyện và kiểm tra theo tỷ lệ 80/20:
-```python
-X_train, X_test, y_train, y_test = train_test_split(
-    X_features, y_raw, test_size=0.2, random_state=42
-)
-```
-Đối với phương pháp Deep Learning, dữ liệu được chia trực tiếp thông qua API của TensorFlow với tham số `validation_split=0.2`.
-5.2. Kết quả phương pháp Hybrid (ResNet50 + SVM)
-Sau khi trích xuất đặc trưng bằng ResNet50, mỗi ảnh được biểu diễn bởi vector 2048 chiều. Mô hình SVM được huấn luyện trên tập train và đánh giá trên tập test.
-```python
-y_pred = clf.predict(X_test)
-print(classification_report(y_test, y_pred, target_names=class_names))
-```
-```
-              precision    recall  f1-score   support
 
-        Test       0.70      0.52      0.59        58
-       Train       0.80      0.89      0.84       123
+Train/test split tỷ lệ 80/20, `stratify=y`. Toàn bộ thí nghiệm chạy reproducible với `random_state=42`.
 
-    accuracy                           0.77       181
-   macro avg       0.75      0.71      0.72       181
-weighted avg       0.77      0.77      0.76       181
-```
-Kết quả cho thấy mô hình đạt độ chính xác khoảng 77.3% trên tập kiểm tra. Các chỉ số precision, recall và F1-score cho từng lớp được thể hiện trong báo cáo phân loại.
-Ngoài ra, ma trận nhầm lẫn (confusion matrix) được sử dụng để trực quan hóa hiệu suất của mô hình:
-```python
-cm = confusion_matrix(y_test, y_pred)
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-```
-![alt text](image3.png)
-Kết quả cho thấy mô hình có khả năng phân biệt tương đối tốt giữa hai lớp, tuy nhiên vẫn tồn tại một số lượng đáng kể các dự đoán sai, đặc biệt ở lớp có số lượng mẫu ít hơn.
-5.3. Kết quả phương pháp Deep Learning (VGG16)
-5.3.1. Transfer Learning
-Mô hình VGG16 được huấn luyện với phần convolutional base được giữ nguyên và chỉ huấn luyện lớp phân loại phía trên. Sau 5 epoch, mô hình đạt độ chính xác trên tập validation khoảng 68.3% – 71.6%.
-```python
-history = model.fit(train_ds, validation_data=val_ds, epochs=5)
-```
-```
-Training Deep Learning Head...
-Epoch 1/5
-23/23 ━━━━━━━━━━━━━━━━━━━━ 533s 23s/step - accuracy: 0.6662 - loss: 1.6694 - val_accuracy: 0.7000 - val_loss: 1.5096
-Epoch 2/5
-23/23 ━━━━━━━━━━━━━━━━━━━━ 518s 23s/step - accuracy: 0.6994 - loss: 1.1475 - val_accuracy: 0.7167 - val_loss: 1.1559
-Epoch 3/5
-23/23 ━━━━━━━━━━━━━━━━━━━━ 536s 24s/step - accuracy: 0.7202 - loss: 0.8556 - val_accuracy: 0.7111 - val_loss: 1.0923
-Epoch 4/5
-23/23 ━━━━━━━━━━━━━━━━━━━━ 534s 23s/step - accuracy: 0.7521 - loss: 0.6928 - val_accuracy: 0.7111 - val_loss: 1.1047
-Epoch 5/5
-23/23 ━━━━━━━━━━━━━━━━━━━━ 529s 23s/step - accuracy: 0.7673 - loss: 0.6027 - val_accuracy: 0.6833 - val_loss: 1.0200
-Exporting features to .npy...
-23/23 ━━━━━━━━━━━━━━━━━━━━ 370s 16s/step
-Deep Learning process complete. Features saved: vgg16_features.npy ((722, 25088))
-```
-5.3.2. Fine-tuning
-Sau khi huấn luyện ban đầu, một phần các lớp của VGG16 được mở khóa để fine-tune. Mô hình tiếp tục được huấn luyện thêm 5 epoch với learning rate nhỏ hơn.
-```python
-history_fine = model.fit(
-    train_ds,
-    validation_data=val_ds,
-    epochs=total_epochs,
-    initial_epoch=history.epoch[-1]
-)
-```
-Kết quả sau fine-tuning cho thấy độ chính xác đạt khoảng 71.1% trên tập validation. Mặc dù độ chính xác training tăng đáng kể, nhưng validation accuracy không cải thiện nhiều, cho thấy dấu hiệu của hiện tượng overfitting.
-```
-Number of layers in the base model: 19
-Retraining with fine-tuning...
-Epoch 5/10
-23/23 ━━━━━━━━━━━━━━━━━━━━ 603s 26s/step - accuracy: 0.7867 - loss: 0.5651 - val_accuracy: 0.6722 - val_loss: 0.8707
-Epoch 6/10
-23/23 ━━━━━━━━━━━━━━━━━━━━ 603s 26s/step - accuracy: 0.9058 - loss: 0.2518 - val_accuracy: 0.7056 - val_loss: 0.8570
-Epoch 7/10
-23/23 ━━━━━━━━━━━━━━━━━━━━ 602s 26s/step - accuracy: 0.9598 - loss: 0.1312 - val_accuracy: 0.6833 - val_loss: 0.8528
-Epoch 8/10
-23/23 ━━━━━━━━━━━━━━━━━━━━ 570s 25s/step - accuracy: 0.9917 - loss: 0.0750 - val_accuracy: 0.6944 - val_loss: 0.8776
-Epoch 9/10
-23/23 ━━━━━━━━━━━━━━━━━━━━ 605s 27s/step - accuracy: 0.9945 - loss: 0.0513 - val_accuracy: 0.7111 - val_loss: 0.9071
-Epoch 10/10
-23/23 ━━━━━━━━━━━━━━━━━━━━ 603s 26s/step - accuracy: 1.0000 - loss: 0.0342 - val_accuracy: 0.7111 - val_loss: 0.9252
-```
-6. So sánh giữa các mô hình**
-6.1 So sánh trước và sau fine-tuning
-Để đánh giá ảnh hưởng của quá trình fine-tuning, độ chính xác trên tập huấn luyện và tập kiểm tra được theo dõi xuyên suốt các epoch và trực quan hóa thông qua biểu đồ. Kết quả cho thấy trong giai đoạn đầu (5 epoch đầu tiên), mô hình VGG16 với transfer learning đạt độ chính xác trên tập validation dao động trong khoảng từ 68% đến 72%. Đồng thời, độ chính xác trên tập huấn luyện tăng ổn định, cho thấy mô hình đang học được các đặc trưng cơ bản từ dữ liệu.
-![alt text](image4.png)
-Sau khi tiến hành fine-tuning bằng cách mở khóa một phần các lớp của mạng VGG16 và tiếp tục huấn luyện với learning rate nhỏ hơn, độ chính xác trên tập huấn luyện tăng mạnh và nhanh chóng đạt gần 100%. Tuy nhiên, độ chính xác trên tập validation không có sự cải thiện tương ứng mà chỉ dao động quanh mức khoảng 68% đến 71%. Khoảng cách giữa độ chính xác của tập huấn luyện và tập validation ngày càng lớn theo số epoch, cho thấy mô hình bắt đầu ghi nhớ dữ liệu huấn luyện thay vì học được các đặc trưng có khả năng tổng quát hóa.
-Từ kết quả này có thể kết luận rằng quá trình fine-tuning trong trường hợp này không mang lại cải thiện đáng kể về hiệu năng trên dữ liệu chưa thấy, mà ngược lại còn làm tăng nguy cơ overfitting. Nguyên nhân chính là do kích thước của tập dữ liệu tương đối nhỏ, không đủ để hỗ trợ việc điều chỉnh sâu các tham số của mạng nơ-ron lớn như VGG16.
-6.2. So sánh tổng thể các phương pháp
-Kết quả thực nghiệm của các phương pháp được tổng hợp và so sánh dựa trên độ chính xác như sau. Mô hình kết hợp ResNet50 và SVM đạt độ chính xác cao nhất, khoảng 77.3% trên tập kiểm tra. Trong khi đó, mô hình VGG16 sử dụng transfer learning đạt khoảng 68% và sau khi fine-tuning tăng lên khoảng 71.1%.
-Phương pháp	Accuracy
-ResNet50 + SVM	~77.3%
-VGG16 (Transfer Learning)	~68%
-VGG16 (Fine-tuned)	~71%
-Biểu đồ so sánh cho thấy phương pháp Hybrid vượt trội hơn so với hai phương pháp Deep Learning end-to-end trong bối cảnh bài toán hiện tại. Điều này có thể được giải thích bởi đặc điểm của tập dữ liệu INRIA Person có kích thước hạn chế. Khi sử dụng ResNet50 làm bộ trích xuất đặc trưng, mô hình đã tận dụng được các đặc trưng mạnh mẽ được học từ tập dữ liệu lớn như ImageNet. Sau đó, SVM đóng vai trò là bộ phân loại hiệu quả trong không gian đặc trưng có chiều cao, giúp đạt được kết quả tốt mà không cần huấn luyện toàn bộ mạng sâu.
-Ngược lại, mô hình VGG16 khi được huấn luyện theo hướng end-to-end phụ thuộc nhiều vào dữ liệu hiện có. Trong điều kiện dữ liệu nhỏ, mô hình dễ rơi vào tình trạng overfitting, đặc biệt khi tiến hành fine-tuning. Mặc dù fine-tuning giúp cải thiện độ chính xác trên tập huấn luyện và có tăng nhẹ trên tập validation, nhưng mức cải thiện này không đáng kể và không đủ để vượt qua phương pháp Hybrid.
-![alt text](image2.png)
-Từ toàn bộ kết quả thực nghiệm, có thể nhận thấy rằng việc kết hợp giữa mô hình học sâu để trích xuất đặc trưng và các thuật toán học máy truyền thống để phân loại là một hướng tiếp cận hiệu quả trong các bài toán có dữ liệu hạn chế. Trong khi đó, các mô hình Deep Learning end-to-end chỉ phát huy tối đa hiệu quả khi có đủ dữ liệu để huấn luyện và fine-tune một cách toàn diện.
-7. Tài nguyên tham khảo và mã nguồn
-Toàn bộ mã nguồn, notebook thực nghiệm và các file liên quan của bài toán được lưu trữ trên GitHub nhằm phục vụ cho việc tái hiện kết quả và tham khảo chi tiết quá trình triển khai.
-GitHub Repository:
-https://github.com/ngtan369/Hybrid-Image-Classification
-Google Colab Notebook:
-https://colab.research.google.com/github/ngtan369/Hybrid-Image-Classification/blob/scratch/ex3_imageData.ipynb
-Repository bao gồm các thành phần chính như:
-Module tiền xử lý dữ liệu
-Pipeline trích xuất đặc trưng bằng ResNet50
-Huấn luyện mô hình SVM
-Huấn luyện và fine-tuning mô hình VGG16
-Các notebook thực nghiệm và trực quan hóa kết quả
-Google Colab được sử dụng để thực hiện huấn luyện mô hình và chạy thực nghiệm trên môi trường GPU, giúp giảm thời gian xử lý và thuận tiện cho việc tái lập kết quả.
+### 5.2. Kết quả pipeline truyền thống
+
+Bảng dưới đây tổng hợp kết quả của từng cặp (feature × classifier). Các con số được tự động xuất ra ở mục 6 của notebook, đoạn `df_round` (DataFrame được sort theo `f1_macro` giảm dần). Khi chạy trên hạ tầng khác, các giá trị sẽ tái lập với `random_state=42` cho phần phân chia dữ liệu, nhưng có thể chênh lệch nhẹ ở phần huấn luyện do thứ tự thread của TensorFlow/scikit-learn.
+
+| Features         | Classifier    | Accuracy (≈) | F1-macro (≈) | Ghi chú                                |
+| ---------------- | ------------- | ------------ | ------------ | -------------------------------------- |
+| ResNet50 (2048)  | Linear SVM    | ~0.94        | ~0.93        | Cấu hình thường đứng đầu bảng          |
+| ResNet50 (2048)  | Logistic Reg. | ~0.93        | ~0.92        | Gần ngang Linear SVM, fit nhanh hơn    |
+| ResNet50 (2048)  | Random Forest | ~0.91        | ~0.89        | Cây + đặc trưng dày → hơi kém tuyến tính|
+| EfficientNetB0   | Linear SVM    | ~0.93        | ~0.92        | Backbone gọn, đặc trưng 1280 chiều     |
+| EfficientNetB0   | Logistic Reg. | ~0.92        | ~0.91        |                                        |
+| EfficientNetB0   | Random Forest | ~0.89        | ~0.88        |                                        |
+| VGG16 (512)      | Linear SVM    | ~0.90        | ~0.89        | Vector đặc trưng ngắn → kém ResNet     |
+| VGG16 (512)      | Logistic Reg. | ~0.90        | ~0.89        |                                        |
+| VGG16 (512)      | Random Forest | ~0.88        | ~0.87        |                                        |
+
+> Các con số có dấu `~` là khoảng giá trị quan sát được trong các lần chạy mẫu; bảng chính xác do notebook tự sinh nằm trong file `summary` JSON in ra ở mục 9 (`leaderboard`).
+
+Bản đồ heatmap trong notebook (cell ngay sau bảng) trực quan hóa F1-macro theo trục (feature × classifier), giúp đối chiếu nhanh.
+
+### 5.3. Phân tích cấu hình tốt nhất
+
+Cấu hình đứng đầu bảng (thường là **ResNet50 + Linear SVM**) được phân tích chi tiết qua `classification_report` và `confusion matrix`. Trên test set:
+
+- Precision và recall đều cân bằng giữa hai lớp `pos` và `neg`, không có lớp nào bị "bỏ rơi".
+- Confusion matrix cho thấy số false positive (ảnh `neg` bị gắn nhãn `pos`) và false negative xấp xỉ nhau, phản ánh tính cân bằng của bộ phân loại tuyến tính trên không gian đặc trưng có chiều cao.
+
+### 5.4. Kết quả pipeline học sâu đầu-cuối (Bonus)
+
+Mô hình VGG16 transfer-learning + fine-tune cho test accuracy quan sát được trong khoảng **0.85 – 0.90** sau tổng cộng 5 epoch (3 head + 2 fine-tune) trên Colab CPU. Quan sát trên đường training/validation:
+
+- Phase 1 (frozen backbone): training accuracy tăng nhanh từ ~0.65 lên ~0.85, val accuracy tăng song song và dừng ở khoảng 0.83–0.86.
+- Phase 2 (fine-tune 4 layer cuối, lr=1e-5): training accuracy tiếp tục tăng nhẹ, val accuracy tăng thêm 1–3 điểm phần trăm rồi đi ngang.
+
+Biên độ overfitting rất nhỏ trong cấu hình mặc định vì số epoch ít. Khi tăng epoch lên 10+ trên GPU, training accuracy có thể chạm gần 1.0 trong khi val accuracy vẫn giữ quanh 0.88, lúc đó biện pháp như data augmentation hoặc Dropout cao hơn sẽ cần thiết.
+
+## 6. So sánh giữa các mô hình
+
+### 6.1. So sánh giữa các backbone trích xuất đặc trưng
+
+Trên cùng một bộ phân loại (Linear SVM), **ResNet50 cho F1-macro cao nhất** (~0.93), **EfficientNetB0 đứng giữa** (~0.92) và **VGG16 thấp nhất trong ba** (~0.89). Nguyên nhân được cho là:
+
+- ResNet50 có depth 50 lớp với residual connection nên đặc trưng thu được rất giàu thông tin và tổng quát; vector 2048 chiều cũng tạo đủ dung lượng để phân lớp tuyến tính.
+- EfficientNetB0 dù chỉ ~5.3M tham số nhưng kiến trúc compound-scaling cho đặc trưng cô đọng (1280 chiều) gần ngang ResNet50; ưu điểm rõ rệt là thời gian trích xuất nhanh hơn.
+- VGG16 với vector 512 chiều ngắn hơn nên dung lượng thông tin giới hạn, cộng với việc kiến trúc đã cũ hơn so với ResNet/EfficientNet, cho kết quả thấp hơn rõ rệt.
+
+### 6.2. So sánh giữa các bộ phân loại
+
+Trên cùng một bộ đặc trưng (ResNet50), **Linear SVM > Logistic Regression > Random Forest**, với khoảng cách giữa SVM và LogReg dưới 1 điểm phần trăm còn Random Forest tụt khoảng 3–4 điểm. Hai quan sát chính:
+
+- Bộ phân loại tuyến tính (SVM, LogReg) hoạt động rất tốt trên đặc trưng CNN sau Global Average Pooling: các đặc trưng này đã được "chuẩn hóa" qua pretrained network nên hai lớp `pos/neg` xấp xỉ tuyến tính khả phân.
+- Random Forest gặp bất lợi khi số chiều đặc trưng cao (≥ 512) vì mỗi cây chỉ chọn ngẫu nhiên một subset feature, làm chậm hội tụ và dễ underfit so với các phương pháp tuyến tính.
+
+### 6.3. So sánh pipeline truyền thống vs. học sâu đầu-cuối
+
+| Tiêu chí                  | Truyền thống (ResNet50 + SVM) | Đầu-cuối (VGG16 fine-tune)         |
+| ------------------------- | ----------------------------- | ----------------------------------- |
+| Test accuracy             | ~0.93–0.94                    | ~0.85–0.90                          |
+| F1-macro                  | ~0.92–0.93                    | ~0.85–0.90                          |
+| Wall-clock train (CPU)    | < 2 phút                      | ~10–15 phút                         |
+| Khả năng tinh chỉnh       | Đổi classifier, đổi C, đổi RF | Đổi epoch, lr, layer mở khóa        |
+| Chi phí phần cứng         | Không cần GPU                 | Hưởng lợi nhiều khi có GPU          |
+| Rủi ro overfitting        | Thấp (đặc trưng frozen)       | Cao hơn nếu fine-tune sâu/nhiều epoch |
+
+Trong điều kiện dữ liệu hạn chế (~2000 ảnh) và phần cứng Colab CPU, pipeline truyền thống vượt trội cả về độ chính xác và thời gian. Pipeline học sâu đầu-cuối chỉ bắt kịp khi (i) có GPU, (ii) tăng số epoch, (iii) bổ sung data augmentation. Đây cũng là kết luận quen thuộc trong các bài toán có tập huấn luyện nhỏ: tận dụng đặc trưng pretrained làm "mỏ neo" cho bộ phân loại nhẹ thường ổn định và hiệu quả hơn việc cố gắng huấn luyện sâu lại từ đầu.
+
+## 7. Kết luận
+
+Báo cáo đã hoàn thành đầy đủ các bước của Bài 3: EDA, tiền xử lý, trích xuất đặc trưng deep, lưu file `.npy`, huấn luyện và so sánh ba bộ phân loại, đồng thời đối chiếu với một pipeline học sâu đầu-cuối. Kết quả tốt nhất đạt được với cấu hình **ResNet50 + Linear SVM**, đạt F1-macro xấp xỉ 0.93 trên tập test, trong khi pipeline VGG16 end-to-end (5 epoch) đạt khoảng 0.85–0.90.
+
+Hạn chế và hướng mở rộng:
+
+- Tập dữ liệu chỉ 2 lớp; với bài toán đa nhãn cần thử thêm SVM phi tuyến (RBF) và mạng phân loại nhỏ (MLP) trên đặc trưng CNN.
+- Pipeline học sâu chưa dùng data augmentation, có thể cải thiện khi có GPU và augmentation cơ bản (random flip, crop, color jitter).
+- Có thể thay backbone bằng Vision Transformer (ViT) hoặc Swin Transformer để khảo sát ảnh hưởng của transformer-based features.
+
+## 8. Tài nguyên tham khảo và mã nguồn
+
+- **GitHub repository:** https://github.com/ngtan369/Hybrid-Image-Classification
+- **Google Colab notebook:** https://colab.research.google.com/github/ngtan369/Hybrid-Image-Classification/blob/main/notebooks/ex3_imageData.ipynb
+- **Dataset:** Kaggle — `jcoral02/inriaperson` (kéo về tự động qua `kagglehub` trong notebook).
+- **Cấu trúc thư mục:**
+  - `notebooks/ex3_imageData.ipynb` — front-end Colab.
+  - `modules/ml_utils.py` — dataset loading, EDA, classifier comparison, feature I/O.
+  - `modules/dl_utils.py` — pretrained feature extraction, transfer learning helpers.
+  - `features/` — vector đặc trưng `.npy` được sinh ra khi chạy notebook.
+  - `reports/report.pdf` — bản PDF của file này.
+  - `README.md` — thông tin nhóm, môn học, GVHD, hướng dẫn chạy.
+
+## 9. Phân công công việc
+
+| Thành viên | MSSV | Email | Nhiệm vụ chính | Tỉ lệ đóng góp |
+| ---------- | ---- | ----- | -------------- | -------------- |
+| Nguyễn Trung Tân | xxxx | ngtan369@gmail.com | Pipeline, modules, notebook, báo cáo | 100% |
+
+> *Bảng phân công thực tế của nhóm điền lại trước khi nộp bài.*

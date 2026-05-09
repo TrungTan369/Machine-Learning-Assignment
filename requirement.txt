@@ -1,8 +1,8 @@
 numpy
-opencv-python
+pandas
 matplotlib
+seaborn
+Pillow
 scikit-learn
-scikit-image
 tensorflow
 kagglehub
-pathlib
