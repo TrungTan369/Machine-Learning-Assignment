@@ -1,45 +1,100 @@
+"""
+dl_utils.py — Deep Learning utilities for the Pedestrian Detection pipeline.
+
+Provides CNN-based feature extraction using pre-trained models (ResNet50, VGG16)
+adapted for 64×128 ROI images.
+"""
+
 from pathlib import Path
+
+import cv2
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.preprocessing import image_dataset_from_directory
 from tensorflow.keras.applications import resnet50, vgg16
 
-def load_and_preprocess_data_tf(dataset_path, image_size=(224,224), batch_size=32, shuffle=False):
-    ds = image_dataset_from_directory(str(dataset_path), labels='inferred', label_mode='int',
-                                      image_size=image_size, batch_size=batch_size, shuffle=shuffle)
-    class_names = ds.class_names
-    imgs, lbls = [], []
-    for b_x, b_y in ds:
-        imgs.append(b_x.numpy()); lbls.append(b_y.numpy())
-    if not imgs:
-        return np.zeros((0,*image_size,3),dtype=np.float32), np.zeros((0,),dtype=np.int32), class_names
-    return np.concatenate(imgs,0).astype(np.float32), np.concatenate(lbls,0).astype(np.int32), class_names
 
-def _get_model_and_preprocess(model_name, input_shape, pooling='avg'):
+def _get_model_and_preprocess(model_name, input_shape=(224, 224, 3), pooling='avg'):
+    """Build a headless pre-trained model with global average pooling.
+
+    Parameters
+    ----------
+    model_name : str  ``'resnet50'`` or ``'vgg16'``
+    input_shape : tuple  e.g. ``(224, 224, 3)``
+    pooling : str  ``'avg'`` for GlobalAveragePooling2D
+
+    Returns
+    -------
+    model : tf.keras.Model
+    preprocess_fn : callable
+    """
     m = model_name.lower()
     if m == 'resnet50':
-        base = resnet50.ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
-        preprocess = resnet50.preprocess_input
+        base = resnet50.ResNet50(weights='imagenet', include_top=False,
+                                 input_shape=input_shape)
+        preprocess_fn = resnet50.preprocess_input
     elif m == 'vgg16':
-        base = vgg16.VGG16(weights='imagenet', include_top=False, input_shape=input_shape)
-        preprocess = vgg16.preprocess_input
+        base = vgg16.VGG16(weights='imagenet', include_top=False,
+                           input_shape=input_shape)
+        preprocess_fn = vgg16.preprocess_input
     else:
         raise ValueError("model_name must be 'resnet50' or 'vgg16'")
+
     x = base.output
     if pooling == 'avg':
         x = tf.keras.layers.GlobalAveragePooling2D()(x)
     model = tf.keras.Model(inputs=base.input, outputs=x)
-    return model, preprocess
+    return model, preprocess_fn
 
-def extract_features_pretrained(X_images, model_name='resnet50', batch_size=32, pooling='avg', verbose=1):
-    H,W = X_images.shape[1], X_images.shape[2]
-    model, preprocess = _get_model_and_preprocess(model_name, (H,W,3), pooling)
-    X_proc = preprocess(X_images.copy())
-    feats = model.predict(X_proc, batch_size=batch_size, verbose=verbose)
-    return feats
 
-def save_features_to_disk(features, labels, prefix, out_dir='features'):
-    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
-    x_path = out / f"{prefix}_X.npy"; y_path = out / f"{prefix}_y.npy"
-    np.save(str(x_path), features); np.save(str(y_path), labels)
-    return str(x_path), str(y_path)
+def cnn_features(images, model_name='resnet50', batch_size=32):
+    """Extract flattened CNN features from ROI images.
+
+    Parameters
+    ----------
+    images : np.ndarray  ``(N, H, W, 3)`` — typically 128×64 ROIs (uint8, RGB)
+    model_name : str  ``'resnet50'`` or ``'vgg16'``
+    batch_size : int
+
+    Returns
+    -------
+    np.ndarray  ``(N, D)`` — 1-D feature vectors (float32)
+    """
+    cnn_input_size = (224, 224)
+    model, preprocess_fn = _get_model_and_preprocess(
+        model_name, input_shape=(*cnn_input_size, 3), pooling='avg'
+    )
+
+    # Resize all ROIs to 224×224 for the pre-trained CNN
+    resized = np.array([
+        cv2.resize(img, cnn_input_size) for img in images
+    ], dtype=np.float32)
+
+    # Apply model-specific preprocessing
+    processed = preprocess_fn(resized.copy())
+
+    # Extract features
+    feats = model.predict(processed, batch_size=batch_size, verbose=1)
+    return feats.astype(np.float32)
+
+
+def save_features(features, labels, filepath_prefix):
+    """Save feature matrix and labels as ``.npy`` files.
+
+    Creates ``<prefix>_X.npy`` and ``<prefix>_y.npy``.
+    """
+    out_dir = Path(filepath_prefix).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.save(f"{filepath_prefix}_X.npy", features)
+    np.save(f"{filepath_prefix}_y.npy", labels)
+    print(f"Saved features → {filepath_prefix}_X.npy  ({features.shape})")
+    print(f"Saved labels   → {filepath_prefix}_y.npy  ({labels.shape})")
+
+
+def load_features(filepath_prefix):
+    """Load feature matrix and labels from ``.npy`` files.
+
+    Returns ``(features, labels)`` numpy arrays.
+    """
+    X = np.load(f"{filepath_prefix}_X.npy")
+    y = np.load(f"{filepath_prefix}_y.npy")
+    return X, y
