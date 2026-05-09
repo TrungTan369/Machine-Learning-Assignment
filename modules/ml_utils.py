@@ -242,6 +242,27 @@ def hog_features(images, pixels_per_cell=(8, 8), cells_per_block=(2, 2),
     return np.array(feats, dtype=np.float32)
 
 
+def hog_feature_single(image, pixels_per_cell=(8, 8), cells_per_block=(2, 2),
+                        orientations=9):
+    """Compute HOG descriptor for a **single** RGB image.
+
+    Parameters
+    ----------
+    image : np.ndarray  ``(H, W, 3)``
+
+    Returns
+    -------
+    np.ndarray  ``(D,)`` — 1-D feature vector (float32)
+    """
+    gray = color.rgb2gray(image)
+    h = feature.hog(gray,
+                    orientations=orientations,
+                    pixels_per_cell=pixels_per_cell,
+                    cells_per_block=cells_per_block,
+                    feature_vector=True)
+    return np.array(h, dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # 4. Sliding window & image pyramid
 # ---------------------------------------------------------------------------
@@ -262,9 +283,10 @@ def sliding_window(image, step_size, window_size):
 
 
 def image_pyramid(image, scale=1.05, min_size=(64, 128)):
-    """Yield progressively down-scaled copies of *image*.
+    """Yield ``(resized_image, cumulative_scale)`` for progressively
+    down-scaled copies of *image*.
 
-    The first yield is the original image.
+    The first yield is the original image at scale 1.0.
 
     Parameters
     ----------
@@ -272,14 +294,16 @@ def image_pyramid(image, scale=1.05, min_size=(64, 128)):
     scale : float  down-scale factor per step (> 1.0)
     min_size : tuple  ``(min_width, min_height)``
     """
-    yield image
+    current_scale = 1.0
+    yield image, current_scale
     while True:
-        w = int(image.shape[1] / scale)
-        h = int(image.shape[0] / scale)
+        current_scale *= scale
+        w = int(image.shape[1] / current_scale)
+        h = int(image.shape[0] / current_scale)
         if w < min_size[0] or h < min_size[1]:
             break
-        image = cv2.resize(image, (w, h))
-        yield image
+        resized = cv2.resize(image, (w, h))
+        yield resized, current_scale
 
 
 # ---------------------------------------------------------------------------
@@ -297,11 +321,10 @@ def non_max_suppression(boxes, scores, iou_threshold=0.3):
 
     Returns
     -------
-    boxes : np.ndarray  ``(M, 4)``
-    scores : np.ndarray  ``(M,)``
+    keep : np.ndarray of int — indices of kept boxes
     """
     if len(boxes) == 0:
-        return np.empty((0, 4)), np.empty((0,))
+        return np.empty((0,), dtype=int)
 
     boxes = np.array(boxes, dtype=np.float32)
     scores = np.array(scores, dtype=np.float32)
@@ -328,32 +351,34 @@ def non_max_suppression(boxes, scores, iou_threshold=0.3):
         inds = np.where(iou <= iou_threshold)[0]
         order = rest[inds]
 
-    keep = np.array(keep)
-    return boxes[keep], scores[keep]
+    return np.array(keep, dtype=int)
 
 
 # ---------------------------------------------------------------------------
 # 6. Feature I/O
 # ---------------------------------------------------------------------------
 
-def save_features(features, labels, filepath_prefix):
+def save_features(features, labels, prefix, out_dir="features"):
     """Save feature matrix and labels as ``.npy`` files.
 
-    Creates ``<prefix>_X.npy`` and ``<prefix>_y.npy``.
+    Creates ``<out_dir>/<prefix>_X.npy`` and ``<out_dir>/<prefix>_y.npy``.
     """
-    out_dir = Path(filepath_prefix).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(f"{filepath_prefix}_X.npy", features)
-    np.save(f"{filepath_prefix}_y.npy", labels)
-    print(f"Saved features → {filepath_prefix}_X.npy  ({features.shape})")
-    print(f"Saved labels   → {filepath_prefix}_y.npy  ({labels.shape})")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    x_path = out / f"{prefix}_X.npy"
+    y_path = out / f"{prefix}_y.npy"
+    np.save(str(x_path), features)
+    np.save(str(y_path), labels)
+    print(f"Saved features → {x_path}  ({features.shape})")
+    print(f"Saved labels   → {y_path}  ({labels.shape})")
 
 
-def load_features(filepath_prefix):
+def load_features(prefix, out_dir="features"):
     """Load feature matrix and labels from ``.npy`` files.
 
     Returns ``(features, labels)`` numpy arrays.
     """
-    X = np.load(f"{filepath_prefix}_X.npy")
-    y = np.load(f"{filepath_prefix}_y.npy")
+    out = Path(out_dir)
+    X = np.load(str(out / f"{prefix}_X.npy"))
+    y = np.load(str(out / f"{prefix}_y.npy"))
     return X, y

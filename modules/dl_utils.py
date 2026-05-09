@@ -13,6 +13,10 @@ import tensorflow as tf
 from tensorflow.keras.applications import resnet50, vgg16
 
 
+# Cache for the loaded model so it isn't rebuilt on every call
+_MODEL_CACHE = {}
+
+
 def _get_model_and_preprocess(model_name, input_shape=(224, 224, 3), pooling='avg'):
     """Build a headless pre-trained model with global average pooling.
 
@@ -27,6 +31,10 @@ def _get_model_and_preprocess(model_name, input_shape=(224, 224, 3), pooling='av
     model : tf.keras.Model
     preprocess_fn : callable
     """
+    cache_key = (model_name, input_shape, pooling)
+    if cache_key in _MODEL_CACHE:
+        return _MODEL_CACHE[cache_key]
+
     m = model_name.lower()
     if m == 'resnet50':
         base = resnet50.ResNet50(weights='imagenet', include_top=False,
@@ -43,6 +51,8 @@ def _get_model_and_preprocess(model_name, input_shape=(224, 224, 3), pooling='av
     if pooling == 'avg':
         x = tf.keras.layers.GlobalAveragePooling2D()(x)
     model = tf.keras.Model(inputs=base.input, outputs=x)
+
+    _MODEL_CACHE[cache_key] = (model, preprocess_fn)
     return model, preprocess_fn
 
 
@@ -77,24 +87,43 @@ def cnn_features(images, model_name='resnet50', batch_size=32):
     return feats.astype(np.float32)
 
 
-def save_features(features, labels, filepath_prefix):
+def cnn_feature_single(image, model_name='resnet50'):
+    """Extract CNN feature for a **single** RGB image.
+
+    Parameters
+    ----------
+    image : np.ndarray  ``(H, W, 3)``
+    model_name : str  ``'resnet50'`` or ``'vgg16'``
+
+    Returns
+    -------
+    np.ndarray  ``(D,)`` — 1-D feature vector (float32)
+    """
+    feats = cnn_features(image[np.newaxis], model_name=model_name, batch_size=1)
+    return feats[0]
+
+
+def save_features(features, labels, prefix, out_dir="features"):
     """Save feature matrix and labels as ``.npy`` files.
 
-    Creates ``<prefix>_X.npy`` and ``<prefix>_y.npy``.
+    Creates ``<out_dir>/<prefix>_X.npy`` and ``<out_dir>/<prefix>_y.npy``.
     """
-    out_dir = Path(filepath_prefix).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(f"{filepath_prefix}_X.npy", features)
-    np.save(f"{filepath_prefix}_y.npy", labels)
-    print(f"Saved features → {filepath_prefix}_X.npy  ({features.shape})")
-    print(f"Saved labels   → {filepath_prefix}_y.npy  ({labels.shape})")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    x_path = out / f"{prefix}_X.npy"
+    y_path = out / f"{prefix}_y.npy"
+    np.save(str(x_path), features)
+    np.save(str(y_path), labels)
+    print(f"Saved features → {x_path}  ({features.shape})")
+    print(f"Saved labels   → {y_path}  ({labels.shape})")
 
 
-def load_features(filepath_prefix):
+def load_features(prefix, out_dir="features"):
     """Load feature matrix and labels from ``.npy`` files.
 
     Returns ``(features, labels)`` numpy arrays.
     """
-    X = np.load(f"{filepath_prefix}_X.npy")
-    y = np.load(f"{filepath_prefix}_y.npy")
+    out = Path(out_dir)
+    X = np.load(str(out / f"{prefix}_X.npy"))
+    y = np.load(str(out / f"{prefix}_y.npy"))
     return X, y
