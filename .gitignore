@@ -15,3 +15,7 @@ features/*.npy
 .env
 .venv/
 *.egg-info/
+
+CLAUDE.md
+report.md
+agent.md
